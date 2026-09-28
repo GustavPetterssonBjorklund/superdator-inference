@@ -1,0 +1,17 @@
+[project]
+name = "superdator-inference-client"
+version = "0.1.0"
+description = "Client library for communicating with the superdator-inference server"
+requires-python = ">=3.9"
+dependencies = [
+    "opencv-python",
+    "numpy",
+    "websocket-client",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/superdator_client"]

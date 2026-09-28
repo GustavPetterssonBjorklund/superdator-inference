@@ -1,13 +1,12 @@
 import argparse
 import logging
-import threading
 import time
 
 import cv2
-import numpy as np
 import websocket
 
-JPEG_QUALITY = 80
+from superdator_client import InferenceClient
+
 STATS_INTERVAL_SEC = 5.0
 
 log = logging.getLogger("client")
@@ -34,45 +33,19 @@ def main():
     if not cap.isOpened():
         raise RuntimeError(f"Could not open webcam {args.camera}")
 
-    latest_frame = None
-    frame_lock = threading.Lock()
     sent_count = 0
     received_count = 0
 
-    def on_open(ws):
-        log.info("Connected to %s", args.url)
-
-    def on_close(ws, close_status_code, close_msg):
-        log.warning("Connection closed (code=%s, reason=%s)", close_status_code, close_msg)
-
-    def on_message(ws, message):
-        nonlocal latest_frame, received_count
-        if isinstance(message, str):
-            log.error("Server sent text message instead of a frame: %s", message)
-            return
-
-        frame = cv2.imdecode(np.frombuffer(message, np.uint8), cv2.IMREAD_COLOR)
-        if frame is None:
-            log.warning("Received %d bytes but failed to decode as an image", len(message))
-            return
-
+    def on_frame(frame):
+        nonlocal received_count
         received_count += 1
-        log.debug("Decoded annotated frame #%d (%d bytes)", received_count, len(message))
-        with frame_lock:
-            latest_frame = frame
+        log.debug("Decoded annotated frame #%d", received_count)
 
-    def on_error(ws, error):
+    def on_error(error):
         log.error("Websocket error: %s", error)
 
-    ws = websocket.WebSocketApp(
-        args.url,
-        on_open=on_open,
-        on_close=on_close,
-        on_message=on_message,
-        on_error=on_error,
-    )
-    ws_thread = threading.Thread(target=ws.run_forever, daemon=True)
-    ws_thread.start()
+    client = InferenceClient(args.url, on_frame=on_frame, on_error=on_error)
+    client.connect()
 
     last_stats_time = time.monotonic()
 
@@ -83,29 +56,18 @@ def main():
                 log.error("Failed to read frame from webcam")
                 break
 
-            ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-            if ok:
-                if ws.sock and ws.sock.connected:
-                    try:
-                        ws.send(buffer.tobytes(), opcode=websocket.ABNF.OPCODE_BINARY)
-                        sent_count += 1
-                    except Exception as e:
-                        log.error("Send failed: %s", e)
-                else:
-                    log.debug("Skipping send: websocket not connected")
+            if client.send(frame):
+                sent_count += 1
+            else:
+                log.debug("Skipping send: not connected")
 
             now = time.monotonic()
             if now - last_stats_time >= STATS_INTERVAL_SEC:
                 log.info("Frames sent: %d, frames received: %d", sent_count, received_count)
                 last_stats_time = now
 
-            with frame_lock:
-                display_frame = latest_frame
-
-            if display_frame is not None:
-                cv2.imshow("Inference result", display_frame)
-            else:
-                cv2.imshow("Inference result", frame)
+            display_frame = client.latest_frame
+            cv2.imshow("Inference result", display_frame if display_frame is not None else frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
@@ -113,7 +75,7 @@ def main():
         log.info("Shutting down (frames sent: %d, frames received: %d)", sent_count, received_count)
         cap.release()
         cv2.destroyAllWindows()
-        ws.close()
+        client.close()
 
 
 if __name__ == "__main__":
