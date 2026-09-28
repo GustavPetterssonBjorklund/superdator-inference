@@ -6,8 +6,9 @@ import threading
 # Put server on GPU1, this will leave GPU0 for training and other processes
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
 
-import cv2 
+import cv2
 import numpy as np
+import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 # TensorRT engine file
@@ -119,3 +120,9 @@ async def stream(ws: WebSocket):
         exc = task.exception()
         if exc is not None:
             raise exc
+
+if __name__ == "__main__":
+    # Single worker only: the inference thread, queue, and TensorRT engine
+    # are process-global, so extra workers would each load their own copy
+    # of the model and fight over the GPU.
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1)
