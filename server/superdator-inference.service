@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/gustav/Documents/github/superdator-inference/server
-ExecStart=/home/gustav/Documents/github/superdator-inference/server/.venv/bin/python3 main.py
+WorkingDirectory=/home/gustav/superdator-inference/server
+ExecStart=/home/gustav/superdator-inference/server/.venv/bin/python3 main.py
 Restart=on-failure
 RestartSec=5
 
