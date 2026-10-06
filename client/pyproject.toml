@@ -1,6 +1,6 @@
 [project]
 name = "superdator-inference-client"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Client library for communicating with the superdator-inference server"
 requires-python = ">=3.9"
 dependencies = [
@@ -10,8 +10,12 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = ".." }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/superdator_client"]
