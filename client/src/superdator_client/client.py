@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from typing import Callable, Optional
@@ -42,6 +43,7 @@ class InferenceClient:
 
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        self._latest_detections: list[dict] = []
         self._connected = threading.Event()
 
         self._ws = websocket.WebSocketApp(
@@ -88,6 +90,13 @@ class InferenceClient:
         with self._frame_lock:
             return self._latest_frame
 
+    @property
+    def latest_detections(self) -> list[dict]:
+        """Detections for the most recent frame: dicts with name, confidence, x, y
+        (top-left corner), width and height, all in pixels."""
+        with self._frame_lock:
+            return self._latest_detections
+
     # -- sending -----------------------------------------------------------
 
     def send(self, frame: np.ndarray) -> bool:
@@ -122,7 +131,13 @@ class InferenceClient:
 
     def _handle_message(self, ws, message):
         if isinstance(message, str):
-            log.error("Server sent text message instead of a frame: %s", message)
+            try:
+                payload = json.loads(message)
+            except ValueError:
+                log.error("Server sent text message instead of a frame: %s", message)
+                return
+            with self._frame_lock:
+                self._latest_detections = payload.get("detections", [])
             return
 
         frame = cv2.imdecode(np.frombuffer(message, np.uint8), cv2.IMREAD_COLOR)

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import queue
 import threading
@@ -38,11 +39,34 @@ def inference_worker():
         try:
             result = model.predict(frame, verbose=False)[0]
             annotated = result.plot()
-        
+            detections = extract_detections(result)
+
         except Exception as e:
             main_loop.call_soon_threadsafe(future.set_exception, e)
             continue
-        main_loop.call_soon_threadsafe(future.set_result, annotated)
+        main_loop.call_soon_threadsafe(future.set_result, (annotated, detections))
+
+def extract_detections(result) -> list[dict]:
+    """Convert a YOLO result into JSON-serializable detections.
+
+    x/y is the top-left corner of the bounding box in pixels, width/height its size.
+    """
+    detections = []
+    for box, cls, conf in zip(
+        result.boxes.xyxy.tolist(),
+        result.boxes.cls.tolist(),
+        result.boxes.conf.tolist(),
+    ):
+        x1, y1, x2, y2 = box
+        detections.append({
+            "name": result.names[int(cls)],
+            "confidence": conf,
+            "x": x1,
+            "y": y1,
+            "width": x2 - x1,
+            "height": y2 - y1,
+        })
+    return detections
         
 class FrameMailbox:
     def __init__(self):
@@ -87,7 +111,7 @@ async def stream(ws: WebSocket):
             infer_queue.put((frame, future))
             
             try: 
-                annotated = await future
+                annotated, detections = await future
             except Exception as e:
                 await ws.send_text(f"Error during inference: {str(e)}")
                 continue
@@ -99,6 +123,9 @@ async def stream(ws: WebSocket):
                 continue
                 
             try:
+                # Detections (JSON text) are sent first, followed by the annotated frame
+                # (binary) they belong to.
+                await ws.send_text(json.dumps({"detections": detections}))
                 await ws.send_bytes(buffer.tobytes())
             except Exception as e:
                 break
