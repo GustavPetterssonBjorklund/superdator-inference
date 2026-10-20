@@ -1,11 +1,36 @@
 import asyncio
+import glob
 import json
 import os
 import queue
 import threading
 
-# Put server on GPU1, this will leave GPU0 for training and other processes
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
+
+def detect_gpu_vendor() -> str | None:
+    """Return the vendor of the installed GPU, if one can be detected."""
+    vendors = set()
+    for vendor_path in glob.glob("/sys/class/drm/card*/device/vendor"):
+        try:
+            with open(vendor_path, encoding="ascii") as vendor_file:
+                vendors.add(vendor_file.read().strip().lower())
+        except OSError:
+            continue
+
+    if "0x10de" in vendors:
+        return "nvidia"
+    if "0x1002" in vendors:
+        return "amd"
+    return None
+
+
+GPU_VENDOR = detect_gpu_vendor()
+
+if GPU_VENDOR == "nvidia":
+    # Put server on GPU1, this will leave GPU0 for training and other processes.
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
+elif GPU_VENDOR == "amd":
+    # AMD GPUs do not support CUDA. Prevent CUDA-enabled libraries from selecting it.
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import cv2
 import numpy as np
@@ -13,7 +38,8 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 # TensorRT engine file
-MODEL_PATH = "best.engine"
+MODEL_PATH = os.environ.get("MODEL_PATH", "best.engine")
+INFERENCE_DEVICE = "cuda:0" if GPU_VENDOR == "nvidia" else "cpu"
 
 JPEG_QUALITY = 80
 
@@ -24,12 +50,20 @@ main_loop: asyncio.AbstractEventLoop | None = None
 
 def inference_worker():
     from ultralytics import YOLO
+
+    if INFERENCE_DEVICE == "cpu" and MODEL_PATH.endswith(".engine"):
+        raise RuntimeError(
+            "AMD/CPU inference cannot load a TensorRT .engine model. "
+            "Set MODEL_PATH to a .pt or .onnx model."
+        )
+
     model = YOLO(MODEL_PATH)
     
     # Warm up with dummy input
     model.predict(np.zeros(
         (640, 640, 3),
         dtype=np.uint8),
+        device=INFERENCE_DEVICE,
         verbose=False
     )
     
@@ -37,7 +71,11 @@ def inference_worker():
         frame, future = infer_queue.get()
         
         try:
-            result = model.predict(frame, verbose=False)[0]
+            result = model.predict(
+                frame,
+                device=INFERENCE_DEVICE,
+                verbose=False,
+            )[0]
             annotated = result.plot()
             detections = extract_detections(result)
 
